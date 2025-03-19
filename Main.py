@@ -2,12 +2,10 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from pydub import AudioSegment
-from mutagen.mp3 import MP3
-from mutagen.id3 import ID3, COMM, ID3NoHeaderError
 
 # 无ffmpeg的打包指令：pyinstaller --onefile --windowed Main.py
 # 包含ffmpeg打包指令：pyinstaller --onedir --add-binary="C:/Users/Apermesa/Downloads/Compressed/ffmpeg-2024-12-19-git-494c961379-essentials_build/bin/ffmpeg.exe;." --windowed Main.py
-# 若要打包无ffmpeg版本，则删除下面这两行
+# 若要打包无ffmpeg版本，则注释下面这两行
 # ffmpeg_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ffmpeg.exe")
 # AudioSegment.converter = ffmpeg_path
 
@@ -54,31 +52,20 @@ def embed_file_in_audio(file_path):
 
 def embed_file_in_existing_audio(audio_file_path, file_to_embed_path):
     """
-    将任意文件嵌入到现有音频文件的元数据中，并保持音频可正常播放
+    将任意文件嵌入到现有音频文件中，并保持音频可正常播放
     """
     try:
-        # 加载音频文件
-        audio = MP3(audio_file_path, ID3=ID3)
-
-        # 如果音频文件没有 ID3 标签，添加一个
-        try:
-            audio.add_tags()
-        except ID3NoHeaderError:
-            pass
-
-        # 嵌入文件数据到 COMM 标签
-        with open(file_to_embed_path, "rb") as file:
-            embedded_data = file.read()
+        with open(audio_file_path, "rb") as audio, open(file_to_embed_path, "rb") as file:
+            data = audio.read()
             embedded_file_name = os.path.basename(file_to_embed_path)
 
-            comment = COMM(encoding=3, lang="eng", desc="embedded_file",
-                           text=f"{embedded_file_name}|{embedded_data.hex()}")
-            audio.tags.add(comment)
+            output_file = os.path.join(os.path.dirname(audio_file_path),
+                                       os.path.splitext(os.path.basename(audio_file_path))[0] + " (embedded).mp3")
 
-        # 保存嵌入后的音频文件
-        output_file = os.path.join(os.path.dirname(audio_file_path),
-                                   os.path.splitext(os.path.basename(audio_file_path))[0] + " (embedded).mp3")
-        audio.save(output_file)
+            with open(output_file, "wb") as output:
+                output.write(data)  # 写入原音频数据
+                output.write(b"<FILE>" + embedded_file_name.encode('utf-8') + b"</FILE>")  # 写入文件名标签
+                output.write(file.read())  # 写入嵌入文件数据
 
         messagebox.showinfo("完成", f"文件已嵌入！文件保存为：{output_file}")
     except Exception as e:
@@ -89,26 +76,30 @@ def extract_file_from_audio(input_file):
     从伪装文件中提取嵌入的文件，并恢复其原始文件名
     """
     try:
-        # 加载音频文件
-        audio = MP3(input_file, ID3=ID3)
+        with open(input_file, "rb") as file:
+            data = file.read()
 
-        # 提取 COMM 标签中的嵌入数据
-        embedded_data = None
-        embedded_file_name = None
-        for tag in audio.tags.values():
-            if isinstance(tag, COMM) and tag.desc == "embedded_file":
-                embedded_file_name, hex_data = tag.text.split("|", 1)
-                embedded_data = bytes.fromhex(hex_data)
-                break
+        # 查找文件名标签
+        start_tag = b"<FILE>"
+        end_tag = b"</FILE>"
+        start_index = data.find(start_tag) + len(start_tag)
+        end_index = data.find(end_tag)
 
-        if not embedded_data or not embedded_file_name:
-            messagebox.showerror("错误", "未找到嵌入文件的数据。")
+        if start_index == -1 or end_index == -1:
+            messagebox.showerror("错误", "未找到嵌入文件的标识符。")
             return
 
+        # 提取文件名
+        file_name = data[start_index:end_index].decode('utf-8', errors='ignore').strip()
+
+        # 如果文件名为空，提供默认名称
+        if not file_name:
+            file_name = "extracted_file"
+
         # 提取嵌入文件数据
-        output_file = os.path.join(os.path.dirname(input_file), embedded_file_name)
+        output_file = os.path.join(os.path.dirname(input_file), file_name)
         with open(output_file, "wb") as extracted_file:
-            extracted_file.write(embedded_data)  # 保存嵌入的文件数据
+            extracted_file.write(data[end_index + len(end_tag):])  # 保存嵌入的文件数据
 
         messagebox.showinfo("完成", f"文件已提取！文件保存为：{output_file}")
     except Exception as e:
